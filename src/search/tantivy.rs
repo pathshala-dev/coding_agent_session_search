@@ -12,17 +12,18 @@ const SCHEMA_VERSION: &str = "v1";
 pub struct TantivyIndex {
     pub index: Index,
     writer: IndexWriter,
-    fields: Fields,
+    pub fields: Fields,
 }
 
-struct Fields {
-    agent: Field,
-    workspace: Field,
-    source_path: Field,
-    msg_idx: Field,
-    created_at: Field,
-    title: Field,
-    content: Field,
+#[derive(Clone, Copy)]
+pub struct Fields {
+    pub agent: Field,
+    pub workspace: Field,
+    pub source_path: Field,
+    pub msg_idx: Field,
+    pub created_at: Field,
+    pub title: Field,
+    pub content: Field,
 }
 
 impl TantivyIndex {
@@ -80,6 +81,10 @@ impl TantivyIndex {
     pub fn commit(&mut self) -> Result<()> {
         self.writer.commit()?;
         Ok(())
+    }
+
+    pub fn reader(&self) -> Result<tantivy::IndexReader> {
+        Ok(self.index.reader()?)
     }
 
     #[allow(dead_code)]
