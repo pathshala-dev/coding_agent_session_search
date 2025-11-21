@@ -1,5 +1,7 @@
 # PLAN_FOR_CODING_AGENT_SEARCH
 
+**Progress 2025-11-21:** Schema/migration v1 scaffolded; normalized models added; connector framework with Codex + Cline implementations; CLI + TUI shell runs on nightly toolchain; rusqlite DAL (ensure_agent/workspace, insert_conversation_tree) implemented; index command calls connectors and persists conversations.
+
 Ultra-high-level:
 Build a single Rust binary (`agent-search`, name TBD) that:
 
