@@ -2,9 +2,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use tantivy::collector::TopDocs;
-use tantivy::directory::MmapDirectory;
 use tantivy::schema::*;
-use tantivy::{Index, IndexWriter};
+use tantivy::{Index, IndexWriter, doc};
 
 use crate::connectors::NormalizedConversation;
 
@@ -28,14 +27,13 @@ struct Fields {
 
 impl TantivyIndex {
     pub fn open_or_create(path: &Path) -> Result<Self> {
-        let dir = MmapDirectory::open(path).or_else(|_| {
-            std::fs::create_dir_all(path)?;
-            Ok(MmapDirectory::open(path)?)
-        })?;
-
         let schema = build_schema();
-        let index = Index::open_or_create(dir, schema.clone())
-            .with_context(|| format!("open/create tantivy index at {}", path.display()))?;
+        let index = if path.join("meta.json").exists() {
+            Index::open_in_dir(path)?
+        } else {
+            std::fs::create_dir_all(path)?;
+            Index::create_in_dir(path, schema.clone())?
+        };
         let writer = index
             .writer(50_000_000)
             .with_context(|| "create index writer")?;
@@ -59,21 +57,22 @@ impl TantivyIndex {
 
     pub fn add_conversation(&mut self, conv: &NormalizedConversation) -> Result<()> {
         for msg in &conv.messages {
-            let mut doc = Document::new();
-            doc.add_text(self.fields.agent, &conv.agent_slug);
+            let mut d = doc! {
+                self.fields.agent => conv.agent_slug.clone(),
+                self.fields.source_path => conv.source_path.to_string_lossy().into_owned(),
+                self.fields.msg_idx => msg.idx as u64,
+                self.fields.content => msg.content.clone(),
+            };
             if let Some(ws) = &conv.workspace {
-                doc.add_text(self.fields.workspace, ws.to_string_lossy());
+                d.add_text(self.fields.workspace, ws.to_string_lossy());
             }
-            doc.add_text(self.fields.source_path, conv.source_path.to_string_lossy());
-            doc.add_u64(self.fields.msg_idx, msg.idx as u64);
             if let Some(ts) = msg.created_at.or(conv.started_at) {
-                doc.add_i64(self.fields.created_at, ts);
+                d.add_i64(self.fields.created_at, ts);
             }
             if let Some(title) = &conv.title {
-                doc.add_text(self.fields.title, title);
+                d.add_text(self.fields.title, title);
             }
-            doc.add_text(self.fields.content, &msg.content);
-            self.writer.add_document(doc)?;
+            self.writer.add_document(d)?;
         }
         Ok(())
     }
