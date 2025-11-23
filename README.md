@@ -10,13 +10,13 @@ Unified TUI to search and browse local coding-agent history (Codex, Claude Code,
 
 ```bash
 # Fast path: checksum-verified install + self-test
-curl -fsSL https://raw.githubusercontent.com/coding-agent-search/coding-agent-search/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/coding_agent_session_search/main/install.sh \
   | bash -s -- --easy-mode --verify
 ```
 
 ```powershell
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/coding-agent-search/coding-agent-search/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/Dicklesworthstone/coding_agent_session_search/main/install.ps1 | iex
 install.ps1 -EasyMode -Verify
 ```
 
@@ -36,7 +36,7 @@ install.ps1 -EasyMode -Verify
 ## 🚀 Quickstart
 1) **Install** (easy-mode shown):
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/coding-agent-search/coding-agent-search/main/install.sh \
+   curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/coding_agent_session_search/main/install.sh \
      | bash -s -- --easy-mode --verify
    ```
    - Flags: `--dest DIR`, `--system`, `--artifact-url`, `--checksum`, `--checksum-url`, `--quickstart`, `--quiet`.

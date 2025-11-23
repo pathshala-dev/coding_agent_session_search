@@ -4,8 +4,8 @@ umask 022
 shopt -s lastpipe 2>/dev/null || true
 
 VERSION="${VERSION:-}"
-OWNER="${OWNER:-coding-agent-search}"
-REPO="${REPO:-coding-agent-search}"
+OWNER="${OWNER:-Dicklesworthstone}"
+REPO="${REPO:-coding_agent_session_search}"
 DEST_DEFAULT="$HOME/.local/bin"
 DEST="${DEST:-$DEST_DEFAULT}"
 EASY=0
