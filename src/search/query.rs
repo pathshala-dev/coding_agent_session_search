@@ -107,13 +107,15 @@ impl SearchClient {
             let terms = filters
                 .agents
                 .into_iter()
-                .map(|agent| (
-                    Occur::Should,
-                    Box::new(TermQuery::new(
-                        Term::from_field_text(fields.agent, &agent),
-                        IndexRecordOption::Basic,
-                    )) as Box<dyn Query>,
-                ))
+                .map(|agent| {
+                    (
+                        Occur::Should,
+                        Box::new(TermQuery::new(
+                            Term::from_field_text(fields.agent, &agent),
+                            IndexRecordOption::Basic,
+                        )) as Box<dyn Query>,
+                    )
+                })
                 .collect();
             clauses.push((Occur::Must, Box::new(BooleanQuery::new(terms))));
         }
@@ -122,13 +124,15 @@ impl SearchClient {
             let terms = filters
                 .workspaces
                 .into_iter()
-                .map(|ws| (
-                    Occur::Should,
-                    Box::new(TermQuery::new(
-                        Term::from_field_text(fields.workspace, &ws),
-                        IndexRecordOption::Basic,
-                    )) as Box<dyn Query>,
-                ))
+                .map(|ws| {
+                    (
+                        Occur::Should,
+                        Box::new(TermQuery::new(
+                            Term::from_field_text(fields.workspace, &ws),
+                            IndexRecordOption::Basic,
+                        )) as Box<dyn Query>,
+                    )
+                })
                 .collect();
             clauses.push((Occur::Must, Box::new(BooleanQuery::new(terms))));
         }
