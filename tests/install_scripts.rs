@@ -17,7 +17,7 @@ fn install_sh_succeeds_with_valid_checksum() {
     .to_string();
     let dest = tempfile::TempDir::new().unwrap();
 
-    let status = Command::new("sh")
+    let status = Command::new("bash")
         .arg("install.sh")
         .arg("--version")
         .arg("vtest")
@@ -41,7 +41,7 @@ fn install_sh_fails_with_bad_checksum() {
     let tar = fixture("tests/fixtures/install/coding-agent-search-vtest-linux-x86_64.tar.gz");
     let dest = tempfile::TempDir::new().unwrap();
 
-    let status = Command::new("sh")
+    let status = Command::new("bash")
         .arg("install.sh")
         .arg("--version")
         .arg("vtest")
