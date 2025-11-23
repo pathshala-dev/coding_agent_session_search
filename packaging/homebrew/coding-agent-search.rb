@@ -3,11 +3,17 @@ class CodingAgentSearch < Formula
   homepage "https://github.com/coding-agent-search/coding-agent-search"
   version "0.1.0"
   url "https://github.com/coding-agent-search/coding-agent-search/releases/download/v0.1.0/coding-agent-search-v0.1.0-macos-arm64.tar.gz"
-  # TODO: replace with real checksum when publishing releases
   sha256 "REPLACE_WITH_REAL_SHA256"
   license "MIT"
 
+  def verify_checksum_placeholder!
+    if stable.checksum.to_s.include?("REPLACE_WITH_REAL_SHA256")
+      odie "Formula checksum placeholder detected; update to real SHA256 before publishing."
+    end
+  end
+
   def install
+    verify_checksum_placeholder!
     bin.install "coding-agent-search"
     generate_completions_from_executable(bin/"coding-agent-search", "completions", shells: [:bash, :zsh, :fish])
     man1.install buildpath/"coding-agent-search.1" if File.exist?("coding-agent-search.1")

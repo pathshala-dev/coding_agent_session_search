@@ -4,6 +4,7 @@ Param(
   [string]$Owner = "coding-agent-search",
   [string]$Repo = "coding-agent-search",
   [string]$Checksum = "",
+  [string]$ChecksumUrl = "",
   [switch]$EasyMode
 )
 
@@ -17,12 +18,24 @@ $tmp = New-TemporaryFile | Split-Path
 Write-Host "Downloading $url"
 Invoke-WebRequest -Uri $url -OutFile "$tmp/$zip"
 
-if ($Checksum -ne "") {
-  $hash = Get-FileHash "$tmp/$zip" -Algorithm SHA256
-  if ($hash.Hash.ToLower() -ne $Checksum.ToLower()) {
-    Write-Error "Checksum mismatch"
+$checksumToUse = $Checksum
+if (-not $checksumToUse) {
+  if (-not $ChecksumUrl) {
+    $ChecksumUrl = "$url.sha256"
+  }
+  Write-Host "Fetching checksum from $ChecksumUrl"
+  try {
+    $checksumToUse = (Invoke-WebRequest -Uri $ChecksumUrl -UseBasicParsing).Content.Trim()
+  } catch {
+    Write-Error "Checksum file not found; refusing to install without verification."
     exit 1
   }
+}
+
+$hash = Get-FileHash "$tmp/$zip" -Algorithm SHA256
+if ($hash.Hash.ToLower() -ne $checksumToUse.ToLower()) {
+  Write-Error "Checksum mismatch"
+  exit 1
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem

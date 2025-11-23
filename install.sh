@@ -9,6 +9,7 @@ DEST="${DEST:-$HOME/.local/bin}"
 OWNER="${OWNER:-coding-agent-search}"
 REPO="${REPO:-coding-agent-search}"
 CHECKSUM="${CHECKSUM:-}"
+CHECKSUM_URL="${CHECKSUM_URL:-}"
 EASY=0
 
 while [ $# -gt 0 ]; do
@@ -16,6 +17,8 @@ while [ $# -gt 0 ]; do
     --version) VERSION="$2"; shift 2;;
     --dest) DEST="$2"; shift 2;;
     --easy-mode) EASY=1; shift;;
+    --checksum) CHECKSUM="$2"; shift 2;;
+    --checksum-url) CHECKSUM_URL="$2"; shift 2;;
     *) shift;;
   esac
 done
@@ -32,9 +35,19 @@ trap 'rm -rf "$TMP"' EXIT
 echo "Downloading $URL" >&2
 curl -fsSL "$URL" -o "$TMP/$TAR"
 
-if [ -n "$CHECKSUM" ]; then
-  echo "$CHECKSUM  $TMP/$TAR" | sha256sum -c -
+# Resolve checksum: explicit flag > checksum URL > default URL.sha256
+if [ -z "$CHECKSUM" ]; then
+  if [ -z "$CHECKSUM_URL" ]; then
+    CHECKSUM_URL="${URL}.sha256"
+  fi
+  echo "Fetching checksum from ${CHECKSUM_URL}" >&2
+  if ! CHECKSUM="$(curl -fsSL "$CHECKSUM_URL")"; then
+    echo "ERROR: checksum file not found; refusing to install without verification." >&2
+    exit 1
+  fi
 fi
+
+echo "$CHECKSUM  $TMP/$TAR" | sha256sum -c -
 
 echo "Extracting" >&2
 tar -xzf "$TMP/$TAR" -C "$TMP"
