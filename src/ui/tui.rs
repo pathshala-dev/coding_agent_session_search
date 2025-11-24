@@ -1060,26 +1060,23 @@ pub fn run_tui(data_dir_override: Option<std::path::PathBuf>, once: bool) -> Res
             match input_mode {
                 InputMode::Query => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        match key.code {
-                            KeyCode::Char('r') => {
-                                if query_history.is_empty() {
-                                    status = "No query history yet".to_string();
-                                } else {
-                                    let next = history_cursor
-                                        .map(|idx| (idx + 1) % query_history.len())
-                                        .unwrap_or(0);
-                                    if let Some(saved) = query_history.get(next) {
-                                        history_cursor = Some(next);
-                                        query = saved.clone();
-                                        page = 0;
-                                        dirty_since = Some(Instant::now());
-                                        status = format!("Loaded query #{next} from history");
-                                        cached_detail = None;
-                                        detail_scroll = 0;
-                                    }
+                        if let KeyCode::Char('r') = key.code {
+                            if query_history.is_empty() {
+                                status = "No query history yet".to_string();
+                            } else {
+                                let next = history_cursor
+                                    .map(|idx| (idx + 1) % query_history.len())
+                                    .unwrap_or(0);
+                                if let Some(saved) = query_history.get(next) {
+                                    history_cursor = Some(next);
+                                    query = saved.clone();
+                                    page = 0;
+                                    dirty_since = Some(Instant::now());
+                                    status = format!("Loaded query #{next} from history");
+                                    cached_detail = None;
+                                    detail_scroll = 0;
                                 }
                             }
-                            _ => {}
                         }
                         continue;
                     }
