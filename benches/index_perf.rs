@@ -17,6 +17,7 @@ fn bench_index_full(c: &mut Criterion) {
 
     let opts = IndexOptions {
         full: true,
+        force_rebuild: true,
         watch: false,
         db_path,
         data_dir: data_dir.clone(),
