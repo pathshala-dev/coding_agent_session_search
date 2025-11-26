@@ -66,6 +66,8 @@ cass [tui] [--data-dir DIR] [--once]
 cass index [--full] [--watch] [--data-dir DIR] [--db PATH]
 cass completions <shell>
 cass man
+cass --robot-help
+cass robot-docs <commands|env|paths|schemas|exit-codes|examples|contracts|wrap>
 ```
 - **cass (default)**: starts TUI and spawns a background indexer (watch mode).
 - **index --full** truncates DB/index (non-destructive to source logs) then re-ingests.
@@ -147,6 +149,13 @@ flowchart LR
 - `cargo test --test install_scripts -- --test-threads=1`
 - `cargo test --test e2e_index_tui -- --test-threads=1`
 - `cargo test --test e2e_install_easy -- --test-threads=1`
+
+## 🤖 AI / Automation mode
+- Use `cass --robot-help` for a deterministic, wide, machine-first guide (contract v1). No legacy constraints.
+- Machine-oriented flags: `--color=auto|never|always`, `--progress=auto|bars|plain|none`, `--wrap <cols>`, `--nowrap`, `--trace-file <path>`.
+- Subcommand `cass robot-docs <topic>` dumps focused docs: commands, env, paths, schemas, exit-codes, examples, contracts, wrap.
+- Automation guard: TUI only launches with explicit `cass tui`; in non-TTY contexts without a subcommand we emit guidance instead of spawning TUI.
+- stdout is data-only; stderr carries diagnostics/progress. Errors use JSON payload `{error:{code,kind,message,hint?,retryable}}`; exit codes: 0 ok; 2 usage; 3 missing index/db; 4 network; 5 data-corrupt; 6 incompatible-version; 7 lock/busy; 8 partial; 9 unknown.
 
 ## 🔍 Connectors coverage
 - **Codex**: `~/.codex/sessions/**/rollout-*.jsonl`

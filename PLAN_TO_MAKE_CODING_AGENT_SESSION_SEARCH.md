@@ -53,6 +53,44 @@ Build a single Rust binary (`agent-search`, name TBD) that:
 
 ---
 
+## 0. LLM-first CLI spec (2025-11)
+
+Context: zero legacy users. Optimize `cass` for AI/automation (tmux/headless), not for human muscle memory. Defaults can change freely.
+
+### Contracts
+* CLI is primary; TUI only on explicit `cass tui` (never auto when automation flags present or stdout non-TTY without `tui`).
+* Stdout is data-only; stderr is diagnostics/progress.
+* Machine error schema: `{"error":{"code":int,"kind":string,"message":string,"hint":string,"retryable":bool}}`.
+* Exit codes: 0 ok; 2 usage; 3 missing index/db; 4 network; 5 data-corrupt; 6 incompatible-version; 7 lock/busy; 8 partial; 9 unknown.
+* Deterministic defaults printed in help (data dir, db path, log path). Color bars off when non-TTY unless forced.
+
+### Global flags / subcommands
+* `--robot-help`: deterministic, wide guide (Summary, Commands, Defaults, Exit codes, JSON/Error schema, Examples, Env, Paths, Trace, Contracts); version header (crate + contract version). No ANSI unless `--color=always`.
+* `robot-docs <topic>` topics: `commands`, `env`, `paths`, `schemas`, `exit-codes`, `examples`, `contracts`, `wrap`.
+* `--json` everywhere data flows (search/index/etc.).
+* `--color=auto|never|always`; default auto (off when non-TTY).
+* `--progress=plain|bars|none`; default bars on TTY, plain otherwise.
+* `--wrap <cols>` and `--nowrap`; default: no forced wrap (wide output encouraged).
+* `--trace-file <path>`: JSONL spans {start_ts,end_ts,duration_ms,cmd,args,exit_code,error?}; never to stdout/stderr.
+
+### Behavioral rules
+* If automation flag present (`--json`, `--robot-help`, `robot-docs`, `--trace-file`), TUI path is bypassed; main returns after CLI action.
+* If no subcommand and stdout non-TTY: emit short guidance and exit 2 (don’t launch TUI).
+* Search pagination: `--limit`, `--offset`, stable ordering.
+* Progress bars suppressed by `--quiet` or `--progress=none`; data unaffected.
+
+### Documentation targets
+* Embed robot-help content generator; robot-docs topic renders parse-stable blocks.
+* README “AI automation” section with wide examples, wrap guidance, trace usage, automation defaults, and no-legacy stance.
+* Changelog + version bump; header in robot-help mirrors crate + contract versions.
+
+### Testing targets
+* Snapshots for `--robot-help` and each `robot-docs` topic.
+* Contract tests: exit codes per scenario, JSON validity, color suppression when non-TTY, wrap flags, TUI bypass, trace file writing.
+* Perf sanity: ensure minimal startup overhead for robot-help/doc paths.
+
+---
+
 ## 2. Research Summary: Where Each Tool Stores History
 
 This section turns web research into concrete connector requirements.
