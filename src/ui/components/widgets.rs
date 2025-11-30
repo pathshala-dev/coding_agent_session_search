@@ -58,6 +58,20 @@ pub fn search_bar(
                 .add_modifier(Modifier::BOLD),
             palette.border_focus_style(),
         ),
+        InputMode::PaneFilter => (
+            " Filter: Pane ".to_string(),
+            Style::default()
+                .fg(palette.accent_alt)
+                .add_modifier(Modifier::BOLD),
+            palette.border_focus_style(),
+        ),
+        InputMode::DetailFind => (
+            " Detail Find ".to_string(),
+            Style::default()
+                .fg(palette.accent_alt)
+                .add_modifier(Modifier::BOLD),
+            palette.border_focus_style(),
+        ),
     };
     let title = Span::styled(title_text, title_style);
 
