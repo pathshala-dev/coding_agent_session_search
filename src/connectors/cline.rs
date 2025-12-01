@@ -44,7 +44,26 @@ impl Connector for ClineConnector {
     }
 
     fn scan(&self, ctx: &ScanContext) -> Result<Vec<NormalizedConversation>> {
-        let root = if ctx.data_root.exists() {
+        let root = if ctx
+            .data_root
+            .file_name()
+            .map(|n| n.to_str().unwrap_or("").contains("claude-dev"))
+            .unwrap_or(false)
+            || fs::read_dir(&ctx.data_root)
+                .map(|mut d| {
+                    d.any(|e| {
+                        e.ok()
+                            .map(|e| {
+                                let p = e.path();
+                                p.is_dir()
+                                    && (p.join("ui_messages.json").exists()
+                                        || p.join("api_conversation_history.json").exists())
+                            })
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        {
             ctx.data_root.clone()
         } else {
             Self::storage_root()

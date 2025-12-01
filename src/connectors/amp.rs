@@ -68,7 +68,12 @@ impl Connector for AmpConnector {
         let mut seen_ids = std::collections::HashSet::new();
 
         // allow tests to override via ctx.data_root
-        let roots = if ctx.data_root.exists() {
+        let roots = if ctx
+            .data_root
+            .file_name()
+            .map(|n| n.to_str().unwrap_or("").contains("amp"))
+            .unwrap_or(false)
+        {
             vec![ctx.data_root.clone()]
         } else {
             Self::candidate_roots()
