@@ -13,3 +13,11 @@ tests/fixtures/search_demo_data/watch_state.json
 /.venv/lib/python3.12/site-packages/googleapiclient/discovery_cache/documents
 /.venv/lib/python3.12/site-packages/pygments/lexers
 /.venv/lib/python3.12/site-packages/pygments/lexers/__pycache__
+
+# AI coding tool artifacts
+.aider.chat.history.md
+.aider.input.history
+.aider.tags.cache.v3/
+
+# Temporary scratch files
+temp_*.rs
