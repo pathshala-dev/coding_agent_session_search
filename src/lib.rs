@@ -14,7 +14,6 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::Utc;
 use clap::{Arg, ArgAction, Command, CommandFactory, Parser, Subcommand, ValueEnum, ValueHint};
 use indexer::IndexOptions;
-use itertools::Itertools;
 use reqwest::Client;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -488,7 +487,7 @@ impl WrapConfig {
 /// - Converts `--robot-docs` (and `--robot-docs=topic`) into the `robot-docs` subcommand.
 /// - Lifts global flags (color/progress/wrap/nowrap/db/quiet/verbose/trace-file/robot-help)
 ///   in front of subcommands so `cass robot-docs commands --color=never` is accepted.
-/// Returns normalized argv plus an optional note for stderr when changes were made.
+///   Returns normalized argv plus an optional note for stderr when changes were made.
 fn normalize_args(raw: Vec<String>) -> (Vec<String>, Option<String>) {
     if raw.is_empty() {
         return (raw, None);
@@ -499,7 +498,7 @@ fn normalize_args(raw: Vec<String>) -> (Vec<String>, Option<String>) {
     let mut sub_seen = false;
     let mut rewrote = false;
 
-    let mut push_global = |arg: String, globals: &mut Vec<String>, rewrote: &mut bool| {
+    let push_global = |arg: String, globals: &mut Vec<String>, rewrote: &mut bool| {
         globals.push(arg);
         *rewrote = true;
     };
@@ -568,6 +567,35 @@ fn normalize_args(raw: Vec<String>) -> (Vec<String>, Option<String>) {
 
 /// Build a friendly parse error with actionable examples.
 fn format_friendly_parse_error(err: clap::Error, raw: &[String], normalized: &[String]) -> String {
+    let is_robot = raw.iter().any(|s| s == "--json" || s == "--robot");
+
+    if is_robot {
+        let mut err_map = serde_json::Map::new();
+        err_map.insert("status".into(), "error".into());
+        err_map.insert("error".into(), err.to_string().into());
+        err_map.insert("kind".into(), "argument_parsing".into());
+
+        if raw != normalized && normalized.len() > 1 {
+            err_map.insert(
+                "normalized_attempt".into(),
+                normalized[1..].join(" ").into(),
+            );
+        }
+
+        let suggestions = vec![
+            "cass --robot-help",
+            "cass search \"query\" --robot --limit 5",
+            "cass capabilities --json",
+        ];
+        err_map.insert("examples".into(), serde_json::json!(suggestions));
+        err_map.insert(
+            "hint".into(),
+            "Check flags syntax (e.g. --limit 5 not limit=5)".into(),
+        );
+
+        return serde_json::to_string_pretty(&err_map).unwrap_or_else(|_| err.to_string());
+    }
+
     let mut parts = Vec::new();
     parts.push("Argument parsing failed; command intent unclear.".to_string());
     parts.push(format!("clap error: {err}"));
