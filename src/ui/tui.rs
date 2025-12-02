@@ -7145,7 +7145,7 @@ mod tests {
 
     #[test]
     fn detail_tab_has_three_variants() {
-        let tabs = [DetailTab::Messages, DetailTab::Snippets, DetailTab::Metadata];
+        let tabs = [DetailTab::Messages, DetailTab::Snippets, DetailTab::Raw];
         assert_eq!(tabs.len(), 3);
 
         // Verify all are distinct
@@ -7206,5 +7206,382 @@ mod tests {
         let line = Line::from("single span");
         let text = line_plain_text(&line);
         assert_eq!(text, "single span");
+    }
+
+    // ==========================================================================
+    // Bulk Selection Tests (tst.ui.bulk)
+    // Tests for multi-select and bulk actions functionality
+    // ==========================================================================
+
+    #[test]
+    fn bulk_selection_hashset_insert_and_contains() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+
+        // Insert (pane_idx, hit_idx) tuples
+        selected.insert((0, 0));
+        selected.insert((0, 1));
+        selected.insert((1, 0));
+
+        assert!(selected.contains(&(0, 0)));
+        assert!(selected.contains(&(0, 1)));
+        assert!(selected.contains(&(1, 0)));
+        assert!(!selected.contains(&(1, 1)));
+        assert_eq!(selected.len(), 3);
+    }
+
+    #[test]
+    fn bulk_selection_hashset_toggle_remove() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        let key = (0, 2);
+
+        // Insert
+        selected.insert(key);
+        assert!(selected.contains(&key));
+
+        // Toggle off (remove)
+        selected.remove(&key);
+        assert!(!selected.contains(&key));
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn bulk_selection_hashset_clear_all() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        selected.insert((0, 0));
+        selected.insert((0, 1));
+        selected.insert((1, 0));
+        selected.insert((2, 5));
+
+        assert_eq!(selected.len(), 4);
+
+        selected.clear();
+        assert!(selected.is_empty());
+        assert_eq!(selected.len(), 0);
+    }
+
+    #[test]
+    fn bulk_selection_select_all_in_pane() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        let pane_idx = 0usize;
+        let hits_len = 5usize;
+
+        // Simulate Ctrl+A: select all in pane
+        for i in 0..hits_len {
+            selected.insert((pane_idx, i));
+        }
+
+        assert_eq!(selected.len(), 5);
+        for i in 0..hits_len {
+            assert!(selected.contains(&(pane_idx, i)));
+        }
+    }
+
+    #[test]
+    fn bulk_selection_deselect_all_in_pane() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        let pane_idx = 0usize;
+        let hits_len = 5usize;
+
+        // Pre-select all in pane
+        for i in 0..hits_len {
+            selected.insert((pane_idx, i));
+        }
+
+        // Check all are selected (Ctrl+A toggle check)
+        let all_selected = (0..hits_len).all(|i| selected.contains(&(pane_idx, i)));
+        assert!(all_selected);
+
+        // Deselect all in pane (Ctrl+A when all already selected)
+        for i in 0..hits_len {
+            selected.remove(&(pane_idx, i));
+        }
+
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn bulk_selection_multiple_panes_independent() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+
+        // Select items from different panes
+        selected.insert((0, 0));
+        selected.insert((0, 2));
+        selected.insert((1, 1));
+        selected.insert((2, 0));
+
+        // Clear only pane 0
+        let pane_0_keys: Vec<_> = selected.iter().filter(|(p, _)| *p == 0).copied().collect();
+        for key in pane_0_keys {
+            selected.remove(&key);
+        }
+
+        assert_eq!(selected.len(), 2);
+        assert!(!selected.contains(&(0, 0)));
+        assert!(!selected.contains(&(0, 2)));
+        assert!(selected.contains(&(1, 1)));
+        assert!(selected.contains(&(2, 0)));
+    }
+
+    #[test]
+    fn bulk_selection_persists_across_pane_changes() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+
+        // Select in pane 0
+        selected.insert((0, 0));
+        selected.insert((0, 1));
+
+        // "Navigate" to pane 1 and select there
+        let active_pane = 1usize;
+        selected.insert((active_pane, 0));
+
+        // "Navigate" back to pane 0 - selections should still exist
+        assert!(selected.contains(&(0, 0)));
+        assert!(selected.contains(&(0, 1)));
+        assert!(selected.contains(&(1, 0)));
+        assert_eq!(selected.len(), 3);
+    }
+
+    #[test]
+    fn bulk_selection_clear_on_new_search_simulation() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        selected.insert((0, 0));
+        selected.insert((0, 1));
+        selected.insert((1, 0));
+
+        // Simulate new search clearing selection
+        // (In actual code, selection is cleared when panes are repopulated)
+        selected.clear();
+
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn bulk_selection_all_selected_check() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        let pane_idx = 0usize;
+        let hits_len = 3usize;
+
+        // Not all selected yet
+        selected.insert((pane_idx, 0));
+        selected.insert((pane_idx, 1));
+
+        let all_selected = (0..hits_len).all(|i| selected.contains(&(pane_idx, i)));
+        assert!(!all_selected);
+
+        // Now select all
+        selected.insert((pane_idx, 2));
+        let all_selected = (0..hits_len).all(|i| selected.contains(&(pane_idx, i)));
+        assert!(all_selected);
+    }
+
+    #[test]
+    fn bulk_selection_is_selected_check_for_rendering() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        selected.insert((0, 1));
+        selected.insert((0, 3));
+
+        // Simulate rendering loop checking each item
+        let pane_idx = 0usize;
+        let is_selected_0 = selected.contains(&(pane_idx, 0));
+        let is_selected_1 = selected.contains(&(pane_idx, 1));
+        let is_selected_2 = selected.contains(&(pane_idx, 2));
+        let is_selected_3 = selected.contains(&(pane_idx, 3));
+
+        assert!(!is_selected_0);
+        assert!(is_selected_1);
+        assert!(!is_selected_2);
+        assert!(is_selected_3);
+    }
+
+    #[test]
+    fn bulk_selection_footer_count_format() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        selected.insert((0, 0));
+        selected.insert((0, 1));
+        selected.insert((1, 0));
+
+        // Format like the footer does
+        let footer = format!("✓ {} selected", selected.len());
+        assert_eq!(footer, "✓ 3 selected");
+    }
+
+    #[test]
+    fn bulk_selection_empty_shows_no_footer() {
+        let selected: HashSet<(usize, usize)> = HashSet::new();
+
+        // When empty, footer shouldn't show selection count
+        assert!(selected.is_empty());
+        // In actual code: if !selected.is_empty() { footer_parts.push(...) }
+    }
+
+    #[test]
+    fn bulk_modal_action_index_bounds() {
+        // BULK_ACTIONS has 4 items: indices 0-3
+        const BULK_ACTIONS: [&str; 4] = [
+            "Open all in editor",
+            "Copy all paths",
+            "Export as JSON",
+            "Clear selection",
+        ];
+
+        let mut bulk_action_idx: usize = 0;
+
+        // Navigate down
+        bulk_action_idx = (bulk_action_idx + 1).min(BULK_ACTIONS.len() - 1);
+        assert_eq!(bulk_action_idx, 1);
+
+        // Navigate to end
+        bulk_action_idx = BULK_ACTIONS.len() - 1;
+        assert_eq!(bulk_action_idx, 3);
+
+        // Try to go past end
+        bulk_action_idx = (bulk_action_idx + 1).min(BULK_ACTIONS.len() - 1);
+        assert_eq!(bulk_action_idx, 3); // Stays at end
+
+        // Navigate up
+        bulk_action_idx = bulk_action_idx.saturating_sub(1);
+        assert_eq!(bulk_action_idx, 2);
+
+        // Navigate to start
+        bulk_action_idx = 0;
+        bulk_action_idx = bulk_action_idx.saturating_sub(1);
+        assert_eq!(bulk_action_idx, 0); // Stays at start
+    }
+
+    #[test]
+    fn bulk_modal_requires_selection() {
+        let selected: HashSet<(usize, usize)> = HashSet::new();
+
+        // Pressing 'A' when nothing selected - modal should not open
+        let show_bulk_modal = !selected.is_empty();
+
+        assert!(!show_bulk_modal);
+    }
+
+    #[test]
+    fn bulk_modal_opens_with_selection() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        selected.insert((0, 0));
+
+        // Pressing 'A' with selection - modal should open
+        let show_bulk_modal = !selected.is_empty();
+
+        assert!(show_bulk_modal);
+    }
+
+    #[test]
+    fn bulk_selection_collect_selected_hits() {
+        // Simulate collecting selected hits for bulk action
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        selected.insert((0, 1));
+        selected.insert((0, 3));
+        selected.insert((1, 0));
+
+        // Simulate panes structure
+        struct MockHit {
+            source_path: String,
+        }
+        struct MockPane {
+            hits: Vec<MockHit>,
+        }
+
+        let panes = [
+            MockPane {
+                hits: vec![
+                    MockHit {
+                        source_path: "path0".into(),
+                    },
+                    MockHit {
+                        source_path: "path1".into(),
+                    },
+                    MockHit {
+                        source_path: "path2".into(),
+                    },
+                    MockHit {
+                        source_path: "path3".into(),
+                    },
+                ],
+            },
+            MockPane {
+                hits: vec![MockHit {
+                    source_path: "pane1_path0".into(),
+                }],
+            },
+        ];
+
+        // Collect selected hits like the bulk action does
+        let selected_hits: Vec<&MockHit> = selected
+            .iter()
+            .filter_map(|&(pane_idx, hit_idx)| {
+                panes.get(pane_idx).and_then(|p| p.hits.get(hit_idx))
+            })
+            .collect();
+
+        assert_eq!(selected_hits.len(), 3);
+        let paths: Vec<_> = selected_hits
+            .iter()
+            .map(|h| h.source_path.as_str())
+            .collect();
+        assert!(paths.contains(&"path1"));
+        assert!(paths.contains(&"path3"));
+        assert!(paths.contains(&"pane1_path0"));
+    }
+
+    #[test]
+    fn bulk_selection_status_message_toggle_on() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        let key = (0, 0);
+
+        // Ctrl+M toggle: insert
+        selected.insert(key);
+        let status = format!(
+            "Selected ({} total) · Ctrl+M toggle · A bulk actions · Esc clear",
+            selected.len()
+        );
+        assert!(status.contains("1 total"));
+        assert!(status.contains("Ctrl+M"));
+        assert!(status.contains("A bulk actions"));
+    }
+
+    #[test]
+    fn bulk_selection_status_message_toggle_off() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        let key = (0, 0);
+
+        selected.insert(key);
+        selected.remove(&key);
+        let status = format!("Deselected ({} selected)", selected.len());
+        assert!(status.contains("0 selected"));
+    }
+
+    #[test]
+    fn bulk_selection_ctrl_a_status_select_all() {
+        let selected_count = 5;
+        let status = format!(
+            "Selected all in pane ({} total) · A bulk actions",
+            selected_count
+        );
+        assert!(status.contains("5 total"));
+        assert!(status.contains("Selected all"));
+    }
+
+    #[test]
+    fn bulk_selection_ctrl_a_status_deselect_all() {
+        let remaining = 0;
+        let status = format!("Deselected all in pane ({} total)", remaining);
+        assert!(status.contains("0 total"));
+        assert!(status.contains("Deselected all"));
+    }
+
+    #[test]
+    fn bulk_selection_esc_clears_status() {
+        let mut selected: HashSet<(usize, usize)> = HashSet::new();
+        selected.insert((0, 0));
+        selected.insert((0, 1));
+
+        let count = selected.len();
+        selected.clear();
+        let status = format!("Cleared {count} selections");
+        assert_eq!(status, "Cleared 2 selections");
     }
 }

@@ -81,6 +81,62 @@ fn introspect_includes_contract_and_globals() {
     );
 }
 
+/// Global flags should expose value types and defaults in introspect.
+#[test]
+fn introspect_global_flags_have_types_and_defaults() {
+    let mut cmd = base_cmd();
+    cmd.args(["introspect", "--json"]);
+    let output = cmd.assert().success().get_output().clone();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: Value = serde_json::from_str(stdout.trim()).expect("valid introspect json");
+    let globals = json["global_flags"].as_array().expect("global_flags array");
+
+    let mut seen = std::collections::HashMap::new();
+    for flag in globals {
+        let name = flag["name"].as_str().unwrap_or_default().to_string();
+        seen.insert(name.clone(), flag.clone());
+        match name.as_str() {
+            "color" => {
+                assert_eq!(flag["value_type"], "enum");
+                assert_eq!(flag["default"], "auto");
+                let enums = flag["enum_values"].as_array().unwrap();
+                assert!(enums.iter().any(|v| v == "auto"));
+                assert!(enums.iter().any(|v| v == "never"));
+                assert!(enums.iter().any(|v| v == "always"));
+            }
+            "progress" => {
+                assert_eq!(flag["value_type"], "enum");
+                assert_eq!(flag["default"], "auto");
+                let enums = flag["enum_values"].as_array().unwrap();
+                assert!(enums.iter().any(|v| v == "auto"));
+                assert!(enums.iter().any(|v| v == "bars"));
+                assert!(enums.iter().any(|v| v == "plain"));
+                assert!(enums.iter().any(|v| v == "none"));
+            }
+            "db" => {
+                assert_eq!(flag["value_type"], "path");
+            }
+            "trace-file" => {
+                assert_eq!(flag["value_type"], "path");
+            }
+            "wrap" => {
+                assert_eq!(flag["value_type"], "integer");
+            }
+            "nowrap" => {
+                assert_eq!(flag["arg_type"], "flag");
+            }
+            _ => {}
+        }
+    }
+
+    for required in ["color", "progress", "db", "trace-file", "wrap", "nowrap"] {
+        assert!(
+            seen.contains_key(required),
+            "global flag {required} should be documented"
+        );
+    }
+}
+
 #[test]
 fn state_matches_status() {
     let mut status = base_cmd();
@@ -307,6 +363,7 @@ fn introspect_matches_golden_contract() {
         "introspect should not log to stderr"
     );
     let actual: Value = serde_json::from_slice(&output.stdout).expect("valid introspect json");
+
     let expected = read_fixture("introspect.json");
     assert_eq!(actual, expected, "introspect contract drifted");
 }

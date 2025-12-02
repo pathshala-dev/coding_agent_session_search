@@ -915,7 +915,7 @@ fn state_index_freshness(state: &serde_json::Value) -> Option<serde_json::Value>
         "age_seconds": index.get("age_seconds"),
         "stale": index.get("stale"),
         "stale_threshold_seconds": index.get("stale_threshold_seconds"),
-        "pending_sessions": pending.and_then(|p| p.get("sessions")),
+        "pending_sessions": pending.and_then(|p| p.get("sessions"))
     }))
 }
 

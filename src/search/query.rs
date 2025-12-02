@@ -71,7 +71,7 @@ pub enum IndexStrategy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryCost {
-    /// Very fast (<10ms typical)
+    /// Very fast (under 10ms typical)
     Low,
     /// Moderate (10-100ms typical)
     Medium,
@@ -618,7 +618,7 @@ static CACHE_DEBUG_ENABLED: Lazy<bool> = Lazy::new(|| {
 
 // Optional byte-based cap for cache memory; 0 means no byte limit (entry-based only).
 // Approximate sizing: ~500 bytes per cached hit typical (content/title/snippets).
-// Example: CASS_CACHE_BYTE_CAP=10485760 for ~10MB limit.
+// Example: CASS_CACHE_BYTE_CAP=10485760 for approx 10MB limit.
 static CACHE_BYTE_CAP: Lazy<usize> = Lazy::new(|| {
     std::env::var("CASS_CACHE_BYTE_CAP")
         .ok()
@@ -1630,13 +1630,10 @@ impl SearchClient {
         }
 
         if !filters.agents.is_empty() {
-            let agent_list: Vec<_> = filters.agents.iter().cloned().collect();
-            tracing::debug!(agents = ?agent_list, "building agent filter query");
-            let terms: Vec<_> = filters
+            let terms = filters
                 .agents
                 .into_iter()
                 .map(|agent| {
-                    tracing::debug!(agent = %agent, "adding agent term query");
                     (
                         Occur::Should,
                         Box::new(TermQuery::new(
@@ -1646,7 +1643,6 @@ impl SearchClient {
                     )
                 })
                 .collect();
-            tracing::debug!(num_agent_terms = terms.len(), "agent filter terms");
             clauses.push((Occur::Must, Box::new(BooleanQuery::new(terms))));
         }
 

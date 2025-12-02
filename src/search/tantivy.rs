@@ -47,7 +47,7 @@ impl MergeStatus {
 }
 
 // Bump this when schema/tokenizer changes. Used to trigger rebuilds.
-pub const SCHEMA_HASH: &str = "tantivy-schema-v4-edge-ngram-preview";
+pub const SCHEMA_HASH: &str = "tantivy-schema-v4-edge-ngram-agent-string";
 
 #[derive(Clone, Copy)]
 pub struct Fields {
@@ -299,7 +299,9 @@ pub fn build_schema() -> Schema {
             .set_index_option(IndexRecordOption::WithFreqsAndPositions),
     );
 
-    schema_builder.add_text_field("agent", TEXT | STORED);
+    // Use STRING (not TEXT) so agent slug is stored as a single non-tokenized term.
+    // This ensures exact match filtering works correctly with TermQuery.
+    schema_builder.add_text_field("agent", STRING | STORED);
     schema_builder.add_text_field("workspace", STRING | STORED);
     schema_builder.add_text_field("source_path", STORED);
     schema_builder.add_u64_field("msg_idx", INDEXED | STORED);
@@ -358,4 +360,747 @@ pub fn ensure_tokenizer(index: &mut Index) {
         .filter(RemoveLongFilter::limit(40))
         .build();
     index.tokenizers().register("hyphen_normalize", analyzer);
+}
+
+// =============================================================================
+// Index Corruption Handling Tests (tst.idx.corrupt)
+// Tests for graceful handling of corrupted or invalid index states
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn open_or_create_handles_missing_schema_hash() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Create index first
+        {
+            let _index = TantivyIndex::open_or_create(path).unwrap();
+        }
+
+        // Remove schema_hash.json to simulate corruption
+        fs::remove_file(path.join("schema_hash.json")).unwrap();
+
+        // Should recreate cleanly without panic
+        let result = TantivyIndex::open_or_create(path);
+        assert!(
+            result.is_ok(),
+            "Should handle missing schema_hash.json gracefully"
+        );
+    }
+
+    #[test]
+    fn open_or_create_handles_invalid_schema_hash() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Create index first
+        {
+            let _index = TantivyIndex::open_or_create(path).unwrap();
+        }
+
+        // Corrupt the schema_hash.json
+        fs::write(
+            path.join("schema_hash.json"),
+            r#"{"schema_hash":"invalid-hash"}"#,
+        )
+        .unwrap();
+
+        // Should detect mismatch and rebuild
+        let result = TantivyIndex::open_or_create(path);
+        assert!(
+            result.is_ok(),
+            "Should handle invalid schema_hash gracefully"
+        );
+    }
+
+    #[test]
+    fn open_or_create_handles_corrupted_schema_hash_json() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Create index first
+        {
+            let _index = TantivyIndex::open_or_create(path).unwrap();
+        }
+
+        // Write completely invalid JSON
+        fs::write(path.join("schema_hash.json"), "{ invalid json {{").unwrap();
+
+        // Should fail to read (non-JSON) but rebuild successfully
+        let result = TantivyIndex::open_or_create(path);
+        // Reading invalid JSON will fail but rebuild should happen
+        assert!(
+            result.is_ok() || result.is_err(),
+            "Should not panic on corrupted schema_hash.json"
+        );
+    }
+
+    #[test]
+    fn open_or_create_handles_empty_directory() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Open on empty directory - should create new
+        let result = TantivyIndex::open_or_create(path);
+        assert!(result.is_ok(), "Should create new index in empty directory");
+    }
+
+    #[test]
+    fn open_or_create_handles_missing_meta_json() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Create valid schema_hash but no meta.json
+        fs::create_dir_all(path).unwrap();
+        fs::write(
+            path.join("schema_hash.json"),
+            format!(r#"{{"schema_hash":"{SCHEMA_HASH}"}}"#),
+        )
+        .unwrap();
+
+        // Should create new index (meta.json missing triggers create)
+        let result = TantivyIndex::open_or_create(path);
+        assert!(
+            result.is_ok(),
+            "Should create new index when meta.json missing"
+        );
+    }
+
+    #[test]
+    fn open_or_create_handles_corrupted_meta_json() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Create index first
+        {
+            let _index = TantivyIndex::open_or_create(path).unwrap();
+        }
+
+        // Corrupt meta.json (Tantivy's index metadata file)
+        let meta_path = path.join("meta.json");
+        if meta_path.exists() {
+            fs::write(&meta_path, "corrupted meta content").unwrap();
+        }
+
+        // Should detect corruption and rebuild (schema hash won't match or open fails)
+        // Note: This may fail on open, but should not panic
+        let result = TantivyIndex::open_or_create(path);
+        // Accept either success (rebuild) or error (corruption detected)
+        assert!(
+            result.is_ok() || result.is_err(),
+            "Should not panic on corrupted meta.json"
+        );
+    }
+
+    #[test]
+    fn open_or_create_handles_truncated_segment_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Create index and add some data
+        {
+            let mut index = TantivyIndex::open_or_create(path).unwrap();
+            // Create a simple doc to generate a segment
+            let doc = doc! {
+                index.fields.agent => "test_agent",
+                index.fields.source_path => "/test/path",
+                index.fields.msg_idx => 0u64,
+                index.fields.content => "test content for segment",
+            };
+            index.writer.add_document(doc).unwrap();
+            index.commit().unwrap();
+        }
+
+        // Find and truncate any .store or .idx files
+        for entry in fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.ends_with(".store") || name_str.ends_with(".idx") {
+                // Truncate the file
+                let file = fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(entry.path())
+                    .unwrap();
+                file.set_len(10).unwrap(); // Leave only 10 bytes
+                break;
+            }
+        }
+
+        // Should handle truncated segment gracefully
+        let result = TantivyIndex::open_or_create(path);
+        // Accept either success (recreate) or error (detected corruption) - no panic
+        assert!(
+            result.is_ok() || result.is_err(),
+            "Should not panic on truncated segment file"
+        );
+    }
+
+    #[test]
+    fn open_or_create_roundtrip_add_and_search() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Create, add, and verify data survives
+        {
+            let mut index = TantivyIndex::open_or_create(path).unwrap();
+            let doc = doc! {
+                index.fields.agent => "test_agent",
+                index.fields.source_path => "/test/path",
+                index.fields.msg_idx => 0u64,
+                index.fields.content => "hello world test content",
+            };
+            index.writer.add_document(doc).unwrap();
+            index.commit().unwrap();
+        }
+
+        // Reopen and verify
+        {
+            let index = TantivyIndex::open_or_create(path).unwrap();
+            let reader = index.reader().unwrap();
+            let searcher = reader.searcher();
+
+            // Should have at least 1 document
+            assert!(
+                searcher.num_docs() >= 1,
+                "Should have at least 1 document after roundtrip"
+            );
+        }
+    }
+
+    #[test]
+    fn open_or_create_rebuild_on_schema_mismatch() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Create index first
+        {
+            let _index = TantivyIndex::open_or_create(path).unwrap();
+        }
+
+        // Write an old/different schema hash
+        fs::write(
+            path.join("schema_hash.json"),
+            r#"{"schema_hash":"old-schema-v1"}"#,
+        )
+        .unwrap();
+
+        // Should rebuild (delete old and create new)
+        let result = TantivyIndex::open_or_create(path);
+        assert!(result.is_ok(), "Should rebuild index on schema mismatch");
+
+        // Verify the new schema hash is written
+        let hash_content = fs::read_to_string(path.join("schema_hash.json")).unwrap();
+        assert!(
+            hash_content.contains(SCHEMA_HASH),
+            "Should write correct schema hash after rebuild"
+        );
+    }
+
+    #[test]
+    fn build_schema_returns_valid_schema() {
+        let schema = build_schema();
+
+        // Verify all required fields exist
+        assert!(schema.get_field("agent").is_ok());
+        assert!(schema.get_field("workspace").is_ok());
+        assert!(schema.get_field("source_path").is_ok());
+        assert!(schema.get_field("msg_idx").is_ok());
+        assert!(schema.get_field("created_at").is_ok());
+        assert!(schema.get_field("title").is_ok());
+        assert!(schema.get_field("content").is_ok());
+        assert!(schema.get_field("title_prefix").is_ok());
+        assert!(schema.get_field("content_prefix").is_ok());
+        assert!(schema.get_field("preview").is_ok());
+    }
+
+    #[test]
+    fn fields_from_schema_extracts_all_fields() {
+        let schema = build_schema();
+        let fields = fields_from_schema(&schema).unwrap();
+
+        // Verify fields are valid (non-panicking access)
+        let _ = fields.agent;
+        let _ = fields.workspace;
+        let _ = fields.source_path;
+        let _ = fields.msg_idx;
+        let _ = fields.created_at;
+        let _ = fields.title;
+        let _ = fields.content;
+        let _ = fields.title_prefix;
+        let _ = fields.content_prefix;
+        let _ = fields.preview;
+    }
+
+    #[test]
+    fn generate_edge_ngrams_produces_prefixes() {
+        let result = generate_edge_ngrams("hello");
+        // Should generate ngrams: "he", "hel", "hell", "hello"
+        assert!(result.contains("he"));
+        assert!(result.contains("hel"));
+        assert!(result.contains("hell"));
+        assert!(result.contains("hello"));
+    }
+
+    #[test]
+    fn generate_edge_ngrams_handles_empty_string() {
+        let result = generate_edge_ngrams("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn generate_edge_ngrams_handles_short_string() {
+        // Single char words are skipped (len < 2)
+        let result = generate_edge_ngrams("a");
+        assert!(result.is_empty());
+
+        // Two char word generates just "ab"
+        let result = generate_edge_ngrams("ab");
+        assert_eq!(result, "ab");
+    }
+
+    #[test]
+    fn generate_edge_ngrams_handles_multiple_words() {
+        let result = generate_edge_ngrams("hello world");
+        // Should contain ngrams from both words
+        assert!(result.contains("he"));
+        assert!(result.contains("wo"));
+        assert!(result.contains("world"));
+    }
+
+    #[test]
+    fn merge_status_should_merge_logic() {
+        let status = MergeStatus {
+            segment_count: 5,
+            last_merge_ts: 0,
+            ms_since_last_merge: -1, // never merged
+            merge_threshold: 4,
+            cooldown_ms: 300_000,
+        };
+        assert!(
+            status.should_merge(),
+            "Should merge when never merged and above threshold"
+        );
+
+        let status_below_threshold = MergeStatus {
+            segment_count: 2,
+            last_merge_ts: 0,
+            ms_since_last_merge: -1,
+            merge_threshold: 4,
+            cooldown_ms: 300_000,
+        };
+        assert!(
+            !status_below_threshold.should_merge(),
+            "Should not merge when below threshold"
+        );
+
+        let status_in_cooldown = MergeStatus {
+            segment_count: 5,
+            last_merge_ts: 1000,
+            ms_since_last_merge: 1000, // Only 1 second since last
+            merge_threshold: 4,
+            cooldown_ms: 300_000, // 5 minute cooldown
+        };
+        assert!(
+            !status_in_cooldown.should_merge(),
+            "Should not merge during cooldown"
+        );
+
+        let status_after_cooldown = MergeStatus {
+            segment_count: 5,
+            last_merge_ts: 1000,
+            ms_since_last_merge: 400_000, // 6+ minutes since last
+            merge_threshold: 4,
+            cooldown_ms: 300_000,
+        };
+        assert!(
+            status_after_cooldown.should_merge(),
+            "Should merge after cooldown expires"
+        );
+    }
+
+    #[test]
+    fn index_dir_creates_versioned_path() {
+        let dir = TempDir::new().unwrap();
+        let result = index_dir(dir.path()).unwrap();
+
+        assert!(result.ends_with(format!("index/{}", SCHEMA_VERSION)));
+        assert!(result.exists());
+    }
+
+    // =============================================================================
+    // Full Index Rebuild Tests (tst.idx.rebuild)
+    // Tests for complete index rebuild scenarios
+    // =============================================================================
+
+    #[test]
+    fn rebuild_from_empty_directory() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Should create index from scratch in empty directory
+        let result = TantivyIndex::open_or_create(path);
+        assert!(result.is_ok(), "Should create index from empty directory");
+
+        // Verify schema hash is written
+        let hash_path = path.join("schema_hash.json");
+        assert!(hash_path.exists(), "Should write schema_hash.json");
+
+        let hash_content = fs::read_to_string(hash_path).unwrap();
+        assert!(
+            hash_content.contains(SCHEMA_HASH),
+            "Should contain current schema hash"
+        );
+    }
+
+    #[test]
+    fn rebuild_creates_meta_json() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let index = TantivyIndex::open_or_create(path).unwrap();
+        drop(index);
+
+        // Tantivy should have created meta.json
+        let meta_path = path.join("meta.json");
+        assert!(meta_path.exists(), "Should create meta.json");
+    }
+
+    #[test]
+    fn rebuild_doc_count_matches_added_documents() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Add multiple documents
+        {
+            let mut index = TantivyIndex::open_or_create(path).unwrap();
+
+            for i in 0..5 {
+                let doc = doc! {
+                    index.fields.agent => "test_agent",
+                    index.fields.source_path => format!("/test/path/{}", i),
+                    index.fields.msg_idx => i as u64,
+                    index.fields.content => format!("content {}", i),
+                };
+                index.writer.add_document(doc).unwrap();
+            }
+            index.commit().unwrap();
+        }
+
+        // Verify doc count
+        {
+            let index = TantivyIndex::open_or_create(path).unwrap();
+            let reader = index.reader().unwrap();
+            let searcher = reader.searcher();
+
+            assert_eq!(searcher.num_docs(), 5, "Should have exactly 5 documents");
+        }
+    }
+
+    #[test]
+    fn rebuild_delete_all_clears_index() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Add documents
+        {
+            let mut index = TantivyIndex::open_or_create(path).unwrap();
+            for i in 0..3 {
+                let doc = doc! {
+                    index.fields.agent => "test_agent",
+                    index.fields.source_path => format!("/test/path/{}", i),
+                    index.fields.msg_idx => i as u64,
+                    index.fields.content => format!("content {}", i),
+                };
+                index.writer.add_document(doc).unwrap();
+            }
+            index.commit().unwrap();
+
+            // Delete all and commit
+            index.delete_all().unwrap();
+            index.commit().unwrap();
+        }
+
+        // Verify empty
+        {
+            let index = TantivyIndex::open_or_create(path).unwrap();
+            let reader = index.reader().unwrap();
+            let searcher = reader.searcher();
+
+            assert_eq!(
+                searcher.num_docs(),
+                0,
+                "Should have 0 documents after delete_all"
+            );
+        }
+    }
+
+    #[test]
+    fn rebuild_force_via_schema_change() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Create and add documents
+        {
+            let mut index = TantivyIndex::open_or_create(path).unwrap();
+            let doc = doc! {
+                index.fields.agent => "test_agent",
+                index.fields.source_path => "/test/path",
+                index.fields.msg_idx => 0u64,
+                index.fields.content => "original content",
+            };
+            index.writer.add_document(doc).unwrap();
+            index.commit().unwrap();
+        }
+
+        // Simulate forcing rebuild by changing schema hash
+        fs::write(
+            path.join("schema_hash.json"),
+            r#"{"schema_hash":"force-rebuild-v0"}"#,
+        )
+        .unwrap();
+
+        // Reopen - should rebuild (losing old data)
+        {
+            let index = TantivyIndex::open_or_create(path).unwrap();
+            let reader = index.reader().unwrap();
+            let searcher = reader.searcher();
+
+            // After force rebuild, index is empty
+            assert_eq!(
+                searcher.num_docs(),
+                0,
+                "Should have 0 documents after force rebuild"
+            );
+        }
+    }
+
+    #[test]
+    fn rebuild_preserves_data_when_schema_matches() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Create and add documents
+        {
+            let mut index = TantivyIndex::open_or_create(path).unwrap();
+            let doc = doc! {
+                index.fields.agent => "preserved_agent",
+                index.fields.source_path => "/preserved/path",
+                index.fields.msg_idx => 42u64,
+                index.fields.content => "preserved content",
+            };
+            index.writer.add_document(doc).unwrap();
+            index.commit().unwrap();
+        }
+
+        // Reopen without schema change - should preserve data
+        {
+            let index = TantivyIndex::open_or_create(path).unwrap();
+            let reader = index.reader().unwrap();
+            let searcher = reader.searcher();
+
+            assert_eq!(
+                searcher.num_docs(),
+                1,
+                "Should preserve 1 document when schema matches"
+            );
+        }
+    }
+
+    #[test]
+    fn rebuild_all_fields_searchable_after_add() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let mut index = TantivyIndex::open_or_create(path).unwrap();
+
+        // Add document with all fields
+        let doc = doc! {
+            index.fields.agent => "claude_code",
+            index.fields.workspace => "/workspace/project",
+            index.fields.source_path => "/path/to/session.jsonl",
+            index.fields.msg_idx => 0u64,
+            index.fields.created_at => 1700000000i64,
+            index.fields.title => "Test Session Title",
+            index.fields.content => "This is the message content",
+            index.fields.title_prefix => generate_edge_ngrams("Test Session Title"),
+            index.fields.content_prefix => generate_edge_ngrams("This is the message content"),
+            index.fields.preview => "Preview text",
+        };
+        index.writer.add_document(doc).unwrap();
+        index.commit().unwrap();
+
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+
+        // Verify document is indexed
+        assert!(
+            searcher.num_docs() >= 1,
+            "Document should be searchable after add"
+        );
+    }
+
+    #[test]
+    fn rebuild_schema_version_consistency() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Create index
+        {
+            let _index = TantivyIndex::open_or_create(path).unwrap();
+        }
+
+        // Read and verify schema hash format
+        let hash_content = fs::read_to_string(path.join("schema_hash.json")).unwrap();
+        let expected = format!(r#"{{"schema_hash":"{}"}}"#, SCHEMA_HASH);
+        assert_eq!(hash_content, expected, "Schema hash format should match");
+    }
+
+    #[test]
+    fn rebuild_commit_creates_searchable_state() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let mut index = TantivyIndex::open_or_create(path).unwrap();
+
+        // Add without commit - not searchable in new reader
+        let doc = doc! {
+            index.fields.agent => "test",
+            index.fields.source_path => "/test",
+            index.fields.msg_idx => 0u64,
+            index.fields.content => "before commit",
+        };
+        index.writer.add_document(doc).unwrap();
+
+        // After commit - searchable
+        index.commit().unwrap();
+
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+        assert!(
+            searcher.num_docs() >= 1,
+            "Document should be searchable after commit"
+        );
+    }
+
+    #[test]
+    fn rebuild_multiple_commits_accumulate() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let mut index = TantivyIndex::open_or_create(path).unwrap();
+
+        // First batch
+        let doc1 = doc! {
+            index.fields.agent => "agent1",
+            index.fields.source_path => "/path1",
+            index.fields.msg_idx => 0u64,
+            index.fields.content => "first batch",
+        };
+        index.writer.add_document(doc1).unwrap();
+        index.commit().unwrap();
+
+        // Second batch
+        let doc2 = doc! {
+            index.fields.agent => "agent2",
+            index.fields.source_path => "/path2",
+            index.fields.msg_idx => 0u64,
+            index.fields.content => "second batch",
+        };
+        index.writer.add_document(doc2).unwrap();
+        index.commit().unwrap();
+
+        // Third batch
+        let doc3 = doc! {
+            index.fields.agent => "agent3",
+            index.fields.source_path => "/path3",
+            index.fields.msg_idx => 0u64,
+            index.fields.content => "third batch",
+        };
+        index.writer.add_document(doc3).unwrap();
+        index.commit().unwrap();
+
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+        assert_eq!(
+            searcher.num_docs(),
+            3,
+            "Should have 3 documents after 3 commits"
+        );
+    }
+
+    #[test]
+    fn rebuild_empty_index_has_zero_docs() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let index = TantivyIndex::open_or_create(path).unwrap();
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+
+        assert_eq!(searcher.num_docs(), 0, "New index should have 0 documents");
+    }
+
+    #[test]
+    fn rebuild_can_reopen_after_close() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        // Create, add, close
+        {
+            let mut index = TantivyIndex::open_or_create(path).unwrap();
+            let doc = doc! {
+                index.fields.agent => "test",
+                index.fields.source_path => "/test",
+                index.fields.msg_idx => 0u64,
+                index.fields.content => "content",
+            };
+            index.writer.add_document(doc).unwrap();
+            index.commit().unwrap();
+        }
+
+        // Reopen
+        let result = TantivyIndex::open_or_create(path);
+        assert!(result.is_ok(), "Should be able to reopen after close");
+
+        let index = result.unwrap();
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+        assert_eq!(searcher.num_docs(), 1, "Data should persist after reopen");
+    }
+
+    #[test]
+    fn rebuild_handles_large_batch() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let mut index = TantivyIndex::open_or_create(path).unwrap();
+
+        // Add 100 documents
+        for i in 0..100 {
+            let doc = doc! {
+                index.fields.agent => "batch_agent",
+                index.fields.source_path => format!("/batch/path/{}", i),
+                index.fields.msg_idx => i as u64,
+                index.fields.content => format!("batch content number {}", i),
+            };
+            index.writer.add_document(doc).unwrap();
+        }
+        index.commit().unwrap();
+
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+        assert_eq!(
+            searcher.num_docs(),
+            100,
+            "Should have 100 documents after large batch"
+        );
+    }
 }

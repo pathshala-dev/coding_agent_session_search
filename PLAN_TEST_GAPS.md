@@ -56,3 +56,18 @@
 3) Add detail-find/search unit coverage (yln.2) and UI interactions (yln.3) using shared fixtures.
 4) Expand install/watch e2e with checksum-fail and delete-detection cases (yln.6 / bd-e2e-install-scripts).
 5) Add CLI negative/limit tests (66o/fwr) once coverage matrix finalized.
+
+## Coverage inventory table (2025-12-02)
+| Area | Existing tests | Mocks/Fakes | Gaps / next actions |
+| --- | --- | --- | --- |
+| CLI contracts (`tests/cli_robot.rs`, `tests/cli_index.rs`) | 68 robot tests (contracts, cursor, fields, aggregates, reset-state, quiet), index arg smoke | None | Add stderr-quiet assertions for every subcommand; snapshot robot-docs per topic; add negative/error-paths for index/watch permissions; automate golden drift detection. |
+| Search/query units (`src/search/query.rs` tests, `tests/search_wildcard_fallback.rs`, `tests/search_caching.rs`) | Wildcard parsing/fallback, cache eviction, boolean queries, typo suggestions | None | Add detail-find highlight coverage with real snippet fixture; agent/workspace filter combos; aggregation correctness unit; match_type weighting tests. |
+| TUI/UX (`tests/ui_{footer,help,hotkeys,snap}.rs`, `ui_components.rs`) | Footer/help/hotkeys, component render, density/ranking cycles, detail-find help text | None | Headless interaction tests for pane filter + detail-find (/ n/N), breadcrumbs, bulk queue/open, staggered reveal, zebra stripes/borders toggle. |
+| Connectors (`tests/connector_{codex,cline,gemini,claude,opencode,amp}.rs`) | Happy path + some malformed/UTF8; since_ts basic; dedupe basics | No mocks (real fixtures) | Add since_ts edge (ISO vs millis) across all; external_id collision cases; append-only ordering; deep nesting + binary blobs per connector. |
+| Storage (`tests/storage.rs`) | Tables/indexes/migrations v1→v3; FK/unique; pragmas | None | Append-only guarantees; rollback safety; WAL durability under crash simulation. |
+| Indexer (`tests/indexer_tantivy.rs`) | Minimal smoke | None | Incremental vs full rebuild correctness; schema-hash mismatch recovery; watch_state bump on targeted reindex. |
+| Concurrency (`tests/concurrent_search.rs`) | 6 scenarios (simultaneous, during indexing, cache contention, reader exhaustion, mixed ops, filter interference) | None | Add concurrent rebuild+search race; read-only DB contention; tokio task stress. |
+| E2E (`e2e_index_tui.rs`, `watch_e2e.rs`, `e2e_filters.rs`, `e2e_install_easy.rs`, `e2e_multi_connector.rs`) | Index+TUI smoke; watch multi-connector; filter e2e; install easy-mode; multi-connector pipeline | Linux-gated for flock/install | Add log/trace assertions; watch-once targeted reindex; install checksum-fail/DEST override; robot-meta freshness validation. |
+| Error handling (`tests/parse_errors.rs`) | 18 parsing error cases across connectors | None | Extend to storage/index corruption, CLI JSON error contract for diag/status/index; malformed config/env. |
+| Logging/tracing (`tests/logging.rs`) | Basic | None | Add span/key assertions for indexer/search/watch; ensure robot mode stderr only WARN/ERROR. |
+| Docs/testing matrix | PLAN_TEST_GAPS.md snapshot | N/A | Publish testing matrix in README and robot-docs; wire into yln.1 deliverable. |
