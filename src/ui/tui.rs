@@ -438,8 +438,8 @@ fn truncate_path(path: &str, max_len: usize) -> String {
         path.to_string()
     };
 
-    // If it fits, return as-is
-    if display_path.len() <= max_len {
+    // If it fits, return as-is (approximate by character count)
+    if display_path.chars().count() <= max_len {
         return display_path;
     }
 
@@ -450,12 +450,13 @@ fn truncate_path(path: &str, max_len: usize) -> String {
     if parts.len() <= 2 {
         // Just truncate from the right
         let ellipsis = "...";
-        let available = max_len.saturating_sub(ellipsis.len());
-        return format!(
-            "{}{}",
-            &display_path[..available.min(display_path.len())],
-            ellipsis
-        );
+        let ellipsis_chars = ellipsis.chars().count();
+        if max_len <= ellipsis_chars {
+            return ellipsis.chars().take(max_len).collect();
+        }
+        let available = max_len - ellipsis_chars;
+        let prefix: String = display_path.chars().take(available).collect();
+        return format!("{prefix}{ellipsis}");
     }
 
     // Determine the leading prefix based on path type
@@ -490,14 +491,15 @@ fn truncate_path(path: &str, max_len: usize) -> String {
     };
 
     // If truncated is still too long, fall back to just showing the filename
-    if truncated.len() > max_len && !last.is_empty() {
+    if truncated.chars().count() > max_len && !last.is_empty() {
         let result = format!(".../{last}");
-        if result.len() <= max_len {
+        if result.chars().count() <= max_len {
             return result;
         }
         // Last resort: truncate the filename itself
         let available = max_len.saturating_sub(4); // ".../"
-        return format!(".../{}", &last[..available.min(last.len())]);
+        let truncated_last: String = last.chars().take(available).collect();
+        return format!(".../{truncated_last}");
     }
 
     truncated
@@ -1572,23 +1574,40 @@ fn contextual_snippet(text: &str, query: &str, window: ContextWindow) -> String 
     if text.is_empty() {
         return String::new();
     }
-    let lowercase = text.to_lowercase();
-    let q = query.to_lowercase();
-
-    let byte_pos = if q.is_empty() {
-        Some(0)
-    } else {
-        lowercase.find(&q)
-    }
-    .or_else(|| {
-        q.split_whitespace()
-            .next()
-            .and_then(|first| lowercase.find(first))
-    });
-
     let chars: Vec<char> = text.chars().collect();
-    let char_pos = byte_pos.map_or(0, |b| text[..b].chars().count());
     let len = chars.len();
+    if len <= size {
+        return text.to_string();
+    }
+
+    let trimmed_query = query.trim();
+    let mut char_pos: usize = 0;
+
+    if !trimmed_query.is_empty() {
+        if text.is_ascii() && trimmed_query.is_ascii() {
+            // ASCII fast path: byte offsets are safe
+            let lowercase = text.to_lowercase();
+            let q = trimmed_query.to_lowercase();
+            let byte_pos = lowercase.find(&q).or_else(|| {
+                q.split_whitespace()
+                    .next()
+                    .and_then(|first| lowercase.find(first))
+            });
+            if let Some(b) = byte_pos {
+                char_pos = b.min(text.len());
+            }
+        } else {
+            // Unicode-safe: fall back to case-sensitive search on original text
+            let first_term = trimmed_query
+                .split_whitespace()
+                .find(|s| !s.is_empty())
+                .unwrap_or(trimmed_query);
+            if let Some(b) = text.find(first_term) {
+                char_pos = text[..b].chars().count();
+            }
+        }
+    }
+
     let start = char_pos.saturating_sub(size / 2);
     let end = (start + size).min(len);
     let slice: String = chars[start..end].iter().collect();
@@ -1598,12 +1617,12 @@ fn contextual_snippet(text: &str, query: &str, window: ContextWindow) -> String 
 }
 
 /// Smart word wrap for display lines (sux.6.6d).
-/// Wraps at word boundaries with continuation indent.
-/// Returns wrapped lines with 2-space initial indent and 4-space continuation indent.
+/// Wraps at word boundaries with a small left indent.
+/// Returns wrapped lines with a single leading space on both the first and continuation lines.
 fn smart_word_wrap(text: &str, max_width: usize) -> Vec<String> {
     let mut lines = Vec::new();
-    let initial_indent = "  ";
-    let continuation_indent = "    ";
+    let initial_indent = " ";
+    let continuation_indent = " ";
 
     // Available width after indent
     let first_line_width = max_width.saturating_sub(initial_indent.len());
@@ -4030,12 +4049,28 @@ pub fn run_tui(
                                     theme_dark = !theme_dark;
                                 }
                                 PaletteAction::ToggleDensity => {
-                                    context_window = match context_window {
-                                        ContextWindow::Small => ContextWindow::Medium,
-                                        ContextWindow::Medium => ContextWindow::Large,
-                                        ContextWindow::Large => ContextWindow::Small,
-                                        ContextWindow::XLarge => ContextWindow::Small,
-                                    };
+                                    density_mode = density_mode.next();
+                                    let height = terminal.size().map(|r| r.height).unwrap_or(24);
+                                    per_pane_limit = calculate_pane_limit(height, density_mode);
+                                    let prev_agent = active_hit(&panes, active_pane)
+                                        .map(|h| h.agent.clone())
+                                        .or_else(|| {
+                                            panes.get(active_pane).map(|p| p.agent.clone())
+                                        });
+                                    let prev_path = active_hit(&panes, active_pane)
+                                        .map(|h| h.source_path.clone());
+                                    panes = rebuild_panes_with_filter(
+                                        &results,
+                                        pane_filter.as_deref(),
+                                        per_pane_limit,
+                                        &mut active_pane,
+                                        &mut pane_scroll_offset,
+                                        prev_agent,
+                                        prev_path,
+                                        MAX_VISIBLE_PANES,
+                                    );
+                                    status = format!("Density: {}", density_mode.label());
+                                    needs_draw = true;
                                 }
                                 PaletteAction::ToggleHelpStrip => {
                                     help_pinned = !help_pinned;
@@ -5092,36 +5127,6 @@ pub fn run_tui(
                             status =
                                 "Workspace filter: type path fragment, Enter=apply, Esc=cancel"
                                     .to_string();
-                        }
-                        KeyCode::F(5) if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                            let now = chrono::Utc::now().timestamp_millis();
-                            // Presets with their labels: (timestamp, label)
-                            let presets: [(Option<i64>, &str); 4] = [
-                                (Some(now - 86_400_000), "last 24h"),
-                                (Some(now - 604_800_000), "last 7 days"),
-                                (Some(now - 2_592_000_000), "last 30 days"),
-                                (None, "all time"),
-                            ];
-                            let current = filters.created_from;
-                            // Find which preset roughly matches current (within 1 minute tolerance)
-                            let idx = presets
-                                .iter()
-                                .position(|(p, _)| match (p, current) {
-                                    (Some(a), Some(b)) => (a - b).abs() < 60_000,
-                                    (None, None) => true,
-                                    _ => false,
-                                })
-                                .unwrap_or(presets.len() - 1);
-                            let next_idx = (idx + 1) % presets.len();
-                            let (next_ts, next_label) = presets[next_idx];
-                            filters.created_from = next_ts;
-                            filters.created_to = None;
-                            page = 0;
-                            status = format!("Time filter: {next_label}");
-                            dirty_since = Some(Instant::now());
-                            focus_region = FocusRegion::Results;
-                            cached_detail = None;
-                            detail_scroll = 0;
                         }
                         KeyCode::F(5) => {
                             if key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -6426,17 +6431,17 @@ mod tests {
     /// Test `smart_word_wrap` for sux.6.6d
     #[test]
     fn smart_word_wrap_works() {
-        // Simple case - fits on one line
+        // Simple case - fits on one line (1-space indent)
         let lines = smart_word_wrap("hello world", 80);
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0], "  hello world");
+        assert_eq!(lines[0], " hello world");
 
-        // Needs wrapping - continuation gets 4-space indent
+        // Needs wrapping - continuation gets 1-space indent (same as first line)
         let long_text = "This is a long text that definitely needs to wrap across multiple lines because it exceeds the maximum width";
         let lines = smart_word_wrap(long_text, 40);
         assert!(lines.len() >= 2);
-        assert!(lines[0].starts_with("  ")); // 2-space indent
-        assert!(lines[1].starts_with("    ")); // 4-space continuation indent
+        assert!(lines[0].starts_with(" ")); // 1-space indent
+        assert!(lines[1].starts_with(" ")); // 1-space continuation indent
 
         // Empty string
         let lines = smart_word_wrap("", 80);
