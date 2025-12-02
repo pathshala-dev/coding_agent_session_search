@@ -5,7 +5,7 @@ use ratatui::widgets::Widget;
 use coding_agent_search::ui::components::theme::ThemePalette;
 use coding_agent_search::ui::components::widgets::search_bar;
 use coding_agent_search::ui::data::InputMode;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Tabs;
 
