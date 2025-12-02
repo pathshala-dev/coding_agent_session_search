@@ -258,7 +258,7 @@ impl TantivyIndex {
                 self.fields.content_prefix,
                 generate_edge_ngrams(&msg.content),
             );
-            d.add_text(self.fields.preview, build_preview(&msg.content, 200));
+            d.add_text(self.fields.preview, build_preview(&msg.content, 400));
             self.writer.add_document(d)?;
         }
         Ok(())

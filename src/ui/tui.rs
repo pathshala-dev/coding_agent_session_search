@@ -110,10 +110,10 @@ impl ContextWindow {
 
     fn size(self) -> usize {
         match self {
-            ContextWindow::Small => 80,
-            ContextWindow::Medium => 160,
-            ContextWindow::Large => 320,
-            ContextWindow::XLarge => 640,
+            ContextWindow::Small => 200,
+            ContextWindow::Medium => 400,
+            ContextWindow::Large => 800,
+            ContextWindow::XLarge => 1600,
         }
     }
 
@@ -149,12 +149,19 @@ impl DensityMode {
         }
     }
 
-    fn lines_per_item(self) -> usize {
+    /// Max snippet lines to render per result for this density.
+    fn snippet_lines(self) -> usize {
         match self {
-            DensityMode::Compact => 2,
-            DensityMode::Cozy => 4,
-            DensityMode::Spacious => 6,
+            DensityMode::Compact => 3,
+            DensityMode::Cozy => 5,
+            DensityMode::Spacious => 8,
         }
+    }
+
+    /// Approximate lines per item for layout sizing (header + location + snippet).
+    fn lines_per_item(self) -> usize {
+        // 2 lines for header/location + snippet allowance.
+        2 + self.snippet_lines()
     }
 
     fn label(self) -> &'static str {
@@ -1531,6 +1538,35 @@ fn agent_display_name(agent: &str) -> String {
         .join(" ")
 }
 
+/// Returns a persistent color for each agent type.
+/// Colors are visually distinct and consistent across sessions.
+fn agent_color(agent: &str) -> Color {
+    match agent.to_lowercase().as_str() {
+        "codex" => Color::Rgb(0, 200, 150), // Teal/Cyan (OpenAI Codex)
+        "claude" | "claude_code" => Color::Rgb(204, 119, 34), // Orange/Amber (Anthropic)
+        "gemini" | "gemini_cli" => Color::Rgb(66, 133, 244), // Google Blue
+        "cline" => Color::Rgb(138, 43, 226), // Blue-Violet (VS Code extension)
+        "opencode" => Color::Rgb(50, 205, 50), // Lime Green
+        "amp" => Color::Rgb(255, 99, 71),   // Tomato/Coral (Sourcegraph)
+        "cursor" => Color::Rgb(147, 112, 219), // Medium Purple
+        "chatgpt" => Color::Rgb(16, 163, 127), // ChatGPT Green
+        "aider" => Color::Rgb(255, 165, 0), // Orange
+        _ => Color::Rgb(169, 169, 169),     // Dark Gray (fallback)
+    }
+}
+
+/// Dims a color by the given factor (0.0 = black, 1.0 = original).
+fn dim_color(color: Color, factor: f32) -> Color {
+    match color {
+        Color::Rgb(r, g, b) => Color::Rgb(
+            (r as f32 * factor) as u8,
+            (g as f32 * factor) as u8,
+            (b as f32 * factor) as u8,
+        ),
+        other => other, // Non-RGB colors returned as-is
+    }
+}
+
 fn contextual_snippet(text: &str, query: &str, window: ContextWindow) -> String {
     let size = window.size();
     if text.is_empty() {
@@ -2501,7 +2537,9 @@ pub fn run_tui(
         };
 
         let bar_width = 8;
-        let filled = ((pct * bar_width).saturating_add(99)) / 100; // round up a bit
+        // Avoid 0/0 stalls: if total is zero we still show a moving bar.
+        let pct_eff = if total == 0 { 5 } else { pct };
+        let filled = ((pct_eff * bar_width).saturating_add(99)) / 100; // round up a bit
         let empty = bar_width.saturating_sub(filled.min(bar_width));
         let bar = format!("{}{}", "█".repeat(filled.min(bar_width)), "░".repeat(empty));
         let spark = render_sparkline(history);
@@ -2923,10 +2961,11 @@ pub fn run_tui(
                                 // Wrap at word boundaries with continuation indent
                                 // Limit to 2 lines for compact display (sux.6.1)
                                 let wrapped_lines = smart_word_wrap(&raw_snippet, 80);
+                                let snippet_budget = density_mode.snippet_lines();
                                 let snippet_lines: Vec<Line> =
                                     wrapped_lines
                                         .into_iter()
-                                        .take(2)
+                                        .take(snippet_budget)
                                         .map(|line| {
                                             syntax_highlight_line(
                                                 &line,
@@ -2948,9 +2987,9 @@ pub fn run_tui(
 
                                 // Alternating background for better visual separation (sux.6.3)
                                 let stripe_bg = if hit_idx % 2 == 0 {
-                                    palette.stripe_even
+                                    theme.bg
                                 } else {
-                                    palette.stripe_odd
+                                    lerp_color(theme.bg, Color::Rgb(255, 255, 255), 0.08)
                                 };
 
                                 let mut lines = vec![header, location_line];
@@ -3034,23 +3073,26 @@ pub fn run_tui(
                         } else {
                             pane.hits.len().to_string()
                         };
+                        // Use persistent agent-specific color for pane title/border
+                        let pane_color = agent_color(&pane.agent);
                         let block = Block::default()
                             .title(Span::styled(
                                 format!("{} ({})", agent_display_name(&pane.agent), count_display),
-                                Style::default().fg(theme.accent).add_modifier(
-                                    if is_focused_pane {
+                                Style::default()
+                                    .fg(pane_color)
+                                    .add_modifier(if is_focused_pane {
                                         Modifier::BOLD
                                     } else {
                                         Modifier::empty()
-                                    },
-                                ),
+                                    }),
                             ))
                             .borders(Borders::ALL)
                             .border_type(border_type)
                             .border_style(Style::default().fg(if is_focused_pane {
-                                theme.accent
+                                pane_color
                             } else {
-                                palette.hint
+                                // Dim the agent color when not focused
+                                dim_color(pane_color, 0.5)
                             }))
                             .style(Style::default().bg(flash_bg).fg(flash_fg));
 
@@ -3059,9 +3101,9 @@ pub fn run_tui(
                             .highlight_style(
                                 Style::default()
                                     .bg(if is_focused_pane {
-                                        theme.accent
+                                        pane_color
                                     } else {
-                                        palette.hint
+                                        dim_color(pane_color, 0.5)
                                     })
                                     .fg(theme.bg)
                                     .add_modifier(Modifier::BOLD),
@@ -6479,43 +6521,43 @@ mod tests {
     #[test]
     fn context_window_cycles_through_all_sizes() {
         let mut window = ContextWindow::Small;
-        assert_eq!(window.size(), 80);
+        assert_eq!(window.size(), 200);
 
         window = window.next();
         assert_eq!(window, ContextWindow::Medium);
-        assert_eq!(window.size(), 160);
+        assert_eq!(window.size(), 400);
 
         window = window.next();
         assert_eq!(window, ContextWindow::Large);
-        assert_eq!(window.size(), 320);
+        assert_eq!(window.size(), 800);
 
         window = window.next();
         assert_eq!(window, ContextWindow::XLarge);
-        assert_eq!(window.size(), 640);
+        assert_eq!(window.size(), 1600);
 
         // Wraps back to Small
         window = window.next();
         assert_eq!(window, ContextWindow::Small);
-        assert_eq!(window.size(), 80);
+        assert_eq!(window.size(), 200);
     }
 
     #[test]
     fn density_mode_cycles_through_all_options() {
         let mut mode = DensityMode::Compact;
-        assert_eq!(mode.lines_per_item(), 2);
+        assert_eq!(mode.lines_per_item(), 5); // 2 + 3 snippet lines
 
         mode = mode.next();
         assert_eq!(mode, DensityMode::Cozy);
-        assert_eq!(mode.lines_per_item(), 4);
+        assert_eq!(mode.lines_per_item(), 7); // 2 + 5 snippet lines
 
         mode = mode.next();
         assert_eq!(mode, DensityMode::Spacious);
-        assert_eq!(mode.lines_per_item(), 6);
+        assert_eq!(mode.lines_per_item(), 10); // 2 + 8 snippet lines
 
         // Wraps back to Compact
         mode = mode.next();
         assert_eq!(mode, DensityMode::Compact);
-        assert_eq!(mode.lines_per_item(), 2);
+        assert_eq!(mode.lines_per_item(), 5);
     }
 
     #[test]
