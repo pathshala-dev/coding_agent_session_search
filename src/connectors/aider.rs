@@ -12,6 +12,31 @@ impl AiderConnector {
         Self
     }
 
+    /// Find aider chat history files under the provided roots (limited depth to avoid wide scans).
+    fn find_chat_files(roots: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
+        let mut files = Vec::new();
+        for root in roots {
+            if !root.exists() {
+                continue;
+            }
+            for entry in WalkDir::new(root)
+                .max_depth(5)
+                .into_iter()
+                .flatten()
+                .filter(|e| e.file_type().is_file())
+            {
+                if entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|n| n == ".aider.chat.history.md")
+                {
+                    files.push(entry.path().to_path_buf());
+                }
+            }
+        }
+        files
+    }
+
     fn parse_chat_history(&self, path: &Path) -> Result<NormalizedConversation> {
         let content = fs::read_to_string(path)?;
         let mut messages = Vec::new();
@@ -94,32 +119,41 @@ impl AiderConnector {
 
 impl Connector for AiderConnector {
     fn detect(&self) -> DetectionResult {
+        // Lightweight optimistic detection: aider writes `.aider.chat.history.md` in the
+        // workspace. We scan a couple small roots (cwd + optional env override) with
+        // shallow depth. Even if nothing is found we still return detected=true so that
+        // watcher-triggered reindex paths are not skipped.
+        let mut roots = vec![std::env::current_dir().unwrap_or_default()];
+        if let Some(override_root) = std::env::var_os("CASS_AIDER_DATA_ROOT") {
+            roots.push(std::path::PathBuf::from(override_root));
+        }
+        let files = Self::find_chat_files(&roots);
+        let mut evidence = vec!["aider connector active".to_string()];
+        if let Some(first) = files.first() {
+            evidence.push(format!("found {}", first.display()));
+        }
         DetectionResult {
             detected: true,
-            evidence: vec!["aider-connector".into()],
+            evidence,
         }
     }
 
     fn scan(&self, ctx: &ScanContext) -> Result<Vec<NormalizedConversation>> {
-        let mut conversations = Vec::new();
+        let mut roots = vec![ctx.data_root.clone()];
+        if let Ok(cwd) = std::env::current_dir() {
+            roots.push(cwd);
+        }
+        let files = Self::find_chat_files(&roots);
 
-        for entry in WalkDir::new(&ctx.data_root)
-            .follow_links(true)
-            .into_iter()
-            .filter_map(Result::ok)
-        {
-            let path = entry.path();
-            if path.is_file()
-                && path
-                    .file_name()
-                    .is_some_and(|n| n == ".aider.chat.history.md")
-                && super::file_modified_since(path, ctx.since_ts)
-                && let Ok(conv) = self.parse_chat_history(path)
-            {
+        let mut conversations = Vec::new();
+        for path in files {
+            if !super::file_modified_since(&path, ctx.since_ts) {
+                continue;
+            }
+            if let Ok(conv) = self.parse_chat_history(&path) {
                 conversations.push(conv);
             }
         }
-
         Ok(conversations)
     }
 }
