@@ -2446,6 +2446,10 @@ pub fn run_tui(
     // Command palette + help strip + pills state
     let mut palette_state = PaletteState::new(palette::default_actions());
 
+    // Keep a short history of indexer percentages for sparkline rendering
+    let mut progress_history: std::collections::VecDeque<u8> =
+        std::collections::VecDeque::with_capacity(24);
+
     // Helper to get indexing phase info (returns phase, current, total, is_rebuild, pct)
     let get_indexing_state = |progress: &std::sync::Arc<crate::indexer::IndexingProgress>| -> (usize, usize, usize, bool, usize) {
         use std::sync::atomic::Ordering;
@@ -2461,8 +2465,25 @@ pub fn run_tui(
         (phase, current, total, is_rebuild, pct)
     };
 
-    // Helper to render progress for footer (enhanced with icons)
-    let render_progress = |progress: &std::sync::Arc<crate::indexer::IndexingProgress>| -> String {
+    // Render tiny sparkline from history (0-100 mapped to ▁▂▃▄▅▆▇█)
+    let render_sparkline = |history: &std::collections::VecDeque<u8>| -> String {
+        if history.len() < 2 {
+            return String::new();
+        }
+        let levels = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+        history
+            .iter()
+            .map(|pct| {
+                let idx = ((*pct as usize * (levels.len() - 1)) / 100).min(levels.len() - 1);
+                levels[idx]
+            })
+            .collect()
+    };
+
+    // Helper to render progress for footer (enhanced with icons + sparkline)
+    let render_progress = |progress: &std::sync::Arc<crate::indexer::IndexingProgress>,
+                           history: &std::collections::VecDeque<u8>|
+     -> String {
         let (phase, current, total, is_rebuild, pct) = get_indexing_state(progress);
         if phase == 0 {
             return String::new();
@@ -2479,8 +2500,12 @@ pub fn run_tui(
         let filled = ((pct * bar_width).saturating_add(99)) / 100; // round up a bit
         let empty = bar_width.saturating_sub(filled.min(bar_width));
         let bar = format!("{}{}", "█".repeat(filled.min(bar_width)), "░".repeat(empty));
+        let spark = render_sparkline(history);
 
         let mut s = format!(" | {icon} {phase_str} {current}/{total} ({pct}%) {bar}");
+        if !spark.is_empty() {
+            s.push_str(&format!(" {spark}"));
+        }
         if is_rebuild {
             s.push_str(" ⚠ FULL REBUILD - Search unavailable");
         } else if phase > 0 {
@@ -3431,7 +3456,15 @@ pub fn run_tui(
                 }
 
                 if let Some(p) = &progress {
-                    let p_str = render_progress(p);
+                    // update sparkline history once per frame
+                    let (_, _, _, _, pct) = get_indexing_state(p);
+                    if pct <= 100 {
+                        if progress_history.len() == progress_history.capacity() {
+                            progress_history.pop_front();
+                        }
+                        progress_history.push_back(pct as u8);
+                    }
+                    let p_str = render_progress(p, &progress_history);
                     if !p_str.is_empty() {
                         footer_parts.push(p_str);
                     }
